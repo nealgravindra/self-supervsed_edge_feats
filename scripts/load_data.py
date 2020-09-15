@@ -313,10 +313,12 @@ class ClusterLoader(torch.utils.data.DataLoader):
 
 # key execution
 def get_data(pkl_fname, label, sample, replicate, 
+             incl_curvature=False,
              load_attn1=None, load_attn2=None, 
              modelpkl_fname1=None, modelpkl_fname2=None,
              preloadn2v=False,
-             out_channels=8, heads=8, negative_slope=0.2, dropout=0.4):
+             out_channels=8, heads=8, negative_slope=0.2, dropout=0.4, 
+             verbose=True):
     """From pkl to Pytorch Geometric data object.
     
     Apply to both train/test. 
@@ -345,7 +347,7 @@ def get_data(pkl_fname, label, sample, replicate,
         datapkl = pickle.load(f)
         f.close()
         
-    if load_attn1 is None and load_attn2 is None:
+    if load_attn1 is None and load_attn2 is None and not incl_curvature and preloadn2v is None:
 
         node_features = datapkl['X']
         if isinstance(node_features, sparse.csr_matrix):
@@ -368,230 +370,1127 @@ def get_data(pkl_fname, label, sample, replicate,
 
         d = Data(x=node_features, edge_index=edge_index, y=labels)
         del node_features,edge_index,labels
-    
-    else:
-        if load_attn1 is not None and load_attn2 is not None:
-            # model for DATA EXTRACTION
-            ## TODO: clean this up in some other script or fx
-            
-            # load proper label
-            node_features = datapkl['X']
-            if isinstance(node_features, sparse.csr_matrix):
-                node_features = torch.from_numpy(node_features.todense()).float()
-            else:
-                node_features = torch.from_numpy(node_features).float()
-            labels = datapkl[load_attn1]
-            if False:
-                # assume label_encoding is done in pre-processing steps
-                label_encoder = {v:i for i,v in enumerate(labels.unique())}
-                labels = labels.map(label_encoder)
-                pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
-            if False:
-                # labels as pd.Series
-                labels = torch.LongTensor(labels.to_numpy())
-            else:
-                labels = torch.LongTensor(labels) # assumes labels as list
-            edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+        
+    # load all edge_feat
+    elif load_attn1 is not None and load_attn2 is not None and incl_curvature and preloadn2v is not None:
+        # model for DATA EXTRACTION
+        ## TODO: clean this up in some other script or fx
 
-            d = Data(x=node_features, edge_index=edge_index, y=labels)
-            del node_features,edge_index,labels
-            
-            # model to grab attn
-            class GAT(torch.nn.Module):
-                def __init__(self):
-                    super(GAT, self).__init__()
-                    self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
-                                        heads=heads, concat=True, negative_slope=negative_slope,
-                                        dropout=dropout, bias=True)
-                    self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
-                                        heads=heads, concat=False, negative_slope=negative_slope,
-                                        dropout=dropout, bias=True)
-
-                def forward(self, data):
-                    x, edge_index = data.x, data.edge_index
-                    x,attn1 = self.gat1(x, edge_index)
-                    x = F.elu(x)
-                    x,attn2 = self.gat2(x, edge_index)
-                    return F.log_softmax(x, dim=1),attn1
-
-
-            # load edge_feature 
-            model = GAT()
-            if False:
-                # general fname loading?
-                model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
-            else:
-                model_pkl = modelpkl_fname1
-            model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
-            model.eval()
-
-            logsoftmax_out, attn = model(d)
-            
-            del model
-            
-            # second attention
-            node_features = datapkl['X']
-            if isinstance(node_features, sparse.csr_matrix):
-                node_features = torch.from_numpy(node_features.todense()).float()
-            else:
-                node_features = torch.from_numpy(node_features).float()
-            labels = datapkl[load_attn2]
-            if False:
-                # assume label_encoding is done in pre-processing steps
-                label_encoder = {v:i for i,v in enumerate(labels.unique())}
-                labels = labels.map(label_encoder)
-                pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
-            if False:
-                # labels as pd.Series
-                labels = torch.LongTensor(labels.to_numpy())
-            else:
-                labels = torch.LongTensor(labels) # assumes labels as list
-            edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
-            del datapkl # clear space
-
-            d = Data(x=node_features, edge_index=edge_index, y=labels)
-            del node_features,edge_index,labels
-            
-            # model to grab attn
-            class GAT(torch.nn.Module):
-                def __init__(self):
-                    super(GAT, self).__init__()
-                    self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
-                                        heads=heads, concat=True, negative_slope=negative_slope,
-                                        dropout=dropout, bias=True)
-                    self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
-                                        heads=heads, concat=False, negative_slope=negative_slope,
-                                        dropout=dropout, bias=True)
-
-                def forward(self, data):
-                    x, edge_index = data.x, data.edge_index
-                    x,attn1 = self.gat1(x, edge_index)
-                    x = F.elu(x)
-                    x,attn2 = self.gat2(x, edge_index)
-                    return F.log_softmax(x, dim=1),attn1
-
-
-            # load edge_feature 
-            model = GAT()
-            if False:
-                # general fname loading?
-                model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
-            else:
-                model_pkl = modelpkl_fname2
-            model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
-            model.eval()
-
-            logsoftmax_out, attn2 = model(d)
-            
-            # update labels
-            with open(pkl_fname,'rb') as f :
-                datapkl = pickle.load(f)
-                f.close()
-            labels = datapkl[label]
-            if False:
-                label_encoder = {v:i for i,v in enumerate(labels.unique())}
-                labels = labels.map(label_encoder)
-                pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
-            if False:
-                labels = torch.LongTensor(labels.to_numpy())
-            else:
-                labels = torch.LongTensor(labels)
-
-            # add other edge feats
-            F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
-            n2v = utils.node2vec_dot2edge(datapkl['adj'], 
-                                          os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
-                                          preloaded=preloadn2v)
-            edge_attr = torch.cat((torch.tensor(attn, dtype=float),
-                                   torch.tensor(attn2, dtype=float),
-                                   torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
-                                   torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
-            d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
-            del model # extra clean
-            
-        elif load_attn1 is not None and load_attn2 is None:
-            # model for DATA EXTRACTION
-            ## TODO: clean this up in some other script or fx
-            
-            # load proper label
-            node_features = datapkl['X']
-            if isinstance(node_features, sparse.csr_matrix):
-                node_features = torch.from_numpy(node_features.todense()).float()
-            else:
-                node_features = torch.from_numpy(node_features).float()
-            labels = datapkl[load_attn1]
-            if False:
-                # assume label_encoding is done in pre-processing steps
-                label_encoder = {v:i for i,v in enumerate(labels.unique())}
-                labels = labels.map(label_encoder)
-                pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
-            if False:
-                # labels as pd.Series
-                labels = torch.LongTensor(labels.to_numpy())
-            else:
-                labels = torch.LongTensor(labels) # assumes labels as list
-            edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
-            del datapkl # clear space
-
-            d = Data(x=node_features, edge_index=edge_index, y=labels)
-            del node_features,edge_index,labels
-            
-            # model to grab attn
-            class GAT(torch.nn.Module):
-                def __init__(self):
-                    super(GAT, self).__init__()
-                    self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
-                                        heads=heads, concat=True, negative_slope=negative_slope,
-                                        dropout=dropout, bias=True)
-                    self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
-                                        heads=heads, concat=False, negative_slope=negative_slope,
-                                        dropout=dropout, bias=True)
-
-                def forward(self, data):
-                    x, edge_index = data.x, data.edge_index
-                    x,attn1 = self.gat1(x, edge_index)
-                    x = F.elu(x)
-                    x,attn2 = self.gat2(x, edge_index)
-                    return F.log_softmax(x, dim=1),attn1
-
-
-            # load edge_feature 
-            model = GAT()
-            if False:
-                # general fname loading?
-                model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
-            else:
-                model_pkl = modelpkl_fname1
-            model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
-            model.eval()
-
-            logsoftmax_out, attn = model(d)
-
-            # update labels
-            with open(pkl_fname,'rb') as f :
-                datapkl = pickle.load(f)
-                f.close()
-            labels = datapkl[label]
-            if False:
-                label_encoder = {v:i for i,v in enumerate(labels.unique())}
-                labels = labels.map(label_encoder)
-                pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
-            if False:
-                labels = torch.LongTensor(labels.to_numpy())
-            else:
-                labels = torch.LongTensor(labels)
-
-            # add other edge feats
-            F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
-            n2v = utils.node2vec_dot2edge(datapkl['adj'], 
-                                          os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
-                                          preloaded=preloadn2v)
-            edge_attr = torch.cat((torch.tensor(attn, dtype=float),
-                                   torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
-                                   torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
-            d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
-            del model # extra clean        
+        # load proper label
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
         else:
-            print('Can only load no attn, attn1, or both attn1 or attn2. Exiting.')
-            exit()
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn1]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname1
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn = model(d)
+
+        del model
+
+        # second attention
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn2]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+        del datapkl # clear space
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname2
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn2 = model(d)
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+        F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+        n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+                                      os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+                                      preloaded=preloadn2v)
+        edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+                               torch.tensor(attn2, dtype=float),
+                               torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
+                               torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+        del model # extra clean
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+            
+    # only load attn1
+    elif load_attn1 is not None and load_attn2 is None and not incl_curvature and preloadn2v is None:
+        # model for DATA EXTRACTION
+        ## TODO: clean this up in some other script or fx
+
+        # load proper label
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn1]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+        del datapkl # clear space
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname1
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn = model(d)
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+#         F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+#         n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+#                                       os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+#                                       preloaded=preloadn2v)
+#         edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+#                                torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
+#                                torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        edge_attr = torch.tensor(attn, dtype=float)    
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+        del model # extra clean
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+
+    # attn2 
+    elif load_attn1 is None and load_attn2 is not None and not incl_curvature and preloadn2v is None:
+        # second attention
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn2]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+        del datapkl # clear space
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname2
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn2 = model(d)
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+#         F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+#         n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+#                                       os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+#                                       preloaded=preloadn2v)
+#         edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+#                                torch.tensor(attn2, dtype=float),
+#                                torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
+#                                torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        edge_attr = torch.tensor(attn2, dtype=float)
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+        del model # extra clean 
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+    
+    # curvature
+    elif load_attn1 is None and load_attn2 is None and incl_curvature and preloadn2v is None:
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[label]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        # add other edge feats
+        F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+#         n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+#                                       os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+#                                       preloaded=preloadn2v)
+#         edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+#                                torch.tensor(attn2, dtype=float),
+#                                torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
+#                                torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        edge_attr = torch.tensor(utils.range_scale(F_e)).reshape(-1,1)
+        d = Data(x=node_features, edge_index=edge_index, edge_attr=edge_attr, y=labels)
+        del node_features,edge_index,labels,edge_attr
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+        
+    # n2v
+    elif load_attn1 is None and load_attn2 is None and not incl_curvature and preloadn2v is not None:
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[label]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        # add other edge feats
+#         F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+        n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+                                      os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+                                      preloaded=preloadn2v)
+#         edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+#                                torch.tensor(attn2, dtype=float),
+#                                torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
+#                                torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        edge_attr = torch.tensor(utils.range_scale(n2v)).reshape(-1,1)
+        d = Data(x=node_features, edge_index=edge_index, edge_attr=edge_attr, y=labels)
+        del node_features,edge_index,labels,edge_attr
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+            
+    # attn1 + attn2
+    elif load_attn1 is not None and load_attn2 is not None and not incl_curvature and preloadn2v is None:
+        # model for DATA EXTRACTION
+        ## TODO: clean this up in some other script or fx
+
+        # load proper label
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn1]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname1
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn = model(d)
+
+        del model
+
+        # second attention
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn2]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+        del datapkl # clear space
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname2
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn2 = model(d)
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+        edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+                               torch.tensor(attn2, dtype=float)),dim=1)
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+        del model # extra clean
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+            
+    # attn1 + attn2 + n2v
+    elif load_attn1 is not None and load_attn2 is not None and not incl_curvature and preloadn2v is not None:
+        # model for DATA EXTRACTION
+        ## TODO: clean this up in some other script or fx
+
+        # load proper label
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn1]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname1
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn = model(d)
+
+        del model
+
+        # second attention
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn2]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+        del datapkl # clear space
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname2
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn2 = model(d)
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+        n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+                                      os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+                                      preloaded=preloadn2v)
+        edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+                               torch.tensor(attn2, dtype=float),
+                               torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+        del model # extra clean
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+          
+    # attn1 + attn2 + curvature
+    elif load_attn1 is not None and load_attn2 is not None and incl_curvature and preloadn2v is None:
+        # model for DATA EXTRACTION
+        ## TODO: clean this up in some other script or fx
+
+        # load proper label
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn1]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname1
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn = model(d)
+
+        del model
+
+        # second attention
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn2]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+        del datapkl # clear space
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname2
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn2 = model(d)
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+        F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+        edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+                               torch.tensor(attn2, dtype=float),
+                               torch.tensor(utils.range_scale(F_e)).reshape(-1,1)),dim=1)
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+        del model # extra clean
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+            
+    # n2v + curvature
+    elif load_attn1 is None and load_attn2 is None and incl_curvature and preloadn2v is not None:
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[label]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        # add other edge feats
+        F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+        n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+                                      os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+                                      preloaded=preloadn2v)
+        edge_attr = torch.cat((torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
+                               torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        d = Data(x=node_features, edge_index=edge_index, edge_attr=edge_attr, y=labels)
+        del node_features,edge_index,labels,edge_attr
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+            
+            
+    # attn1 + curvature
+    elif load_attn1 is not None and load_attn2 is None and incl_curvature and preloadn2v is None:
+        # model for DATA EXTRACTION
+        ## TODO: clean this up in some other script or fx
+
+        # load proper label
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn1]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname1
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn = model(d)
+
+        del model
+
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+        F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+        edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+                               torch.tensor(utils.range_scale(F_e)).reshape(-1,1)),dim=1)
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+            
+            
+    # attn1 + n2v
+    elif load_attn1 is not None and load_attn2 is None and not incl_curvature and preloadn2v is not None:
+        # model for DATA EXTRACTION
+        ## TODO: clean this up in some other script or fx
+
+        # load proper label
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn1]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname1
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn = model(d)
+
+        del model
+
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+        n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+                                      os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+                                      preloaded=preloadn2v)
+        edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+                               torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+        
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+            
+    # attn1 + n2v + curvature
+    elif load_attn1 is not None and load_attn2 is None and incl_curvature and preloadn2v is not None:
+        # model for DATA EXTRACTION
+        ## TODO: clean this up in some other script or fx
+
+        # load proper label
+        node_features = datapkl['X']
+        if isinstance(node_features, sparse.csr_matrix):
+            node_features = torch.from_numpy(node_features.todense()).float()
+        else:
+            node_features = torch.from_numpy(node_features).float()
+        labels = datapkl[load_attn1]
+        if False:
+            # assume label_encoding is done in pre-processing steps
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'ctype_labels_encoding.csv'))
+        if False:
+            # labels as pd.Series
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels) # assumes labels as list
+        edge_index,_ = utils.scipysparse2torchsparse(datapkl['adj'])
+
+        d = Data(x=node_features, edge_index=edge_index, y=labels)
+        del node_features,edge_index,labels
+
+        # model to grab attn
+        class GAT(torch.nn.Module):
+            def __init__(self):
+                super(GAT, self).__init__()
+                self.gat1 = GATConv(d.num_node_features, out_channels=out_channels,
+                                    heads=heads, concat=True, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+                self.gat2 = GATConv(out_channels*heads, d.y.unique().size()[0],
+                                    heads=heads, concat=False, negative_slope=negative_slope,
+                                    dropout=dropout, bias=True)
+
+            def forward(self, data):
+                x, edge_index = data.x, data.edge_index
+                x,attn1 = self.gat1(x, edge_index)
+                x = F.elu(x)
+                x,attn2 = self.gat2(x, edge_index)
+                return F.log_softmax(x, dim=1),attn1
+
+
+        # load edge_feature 
+        model = GAT()
+        if False:
+            # general fname loading?
+            model_pkl = glob.glob(os.path.join(pdfp,'*{}{}_{}*.pkl'.format(sample,replicate,load_attn)))[0]
+        else:
+            model_pkl = modelpkl_fname1
+        model.load_state_dict(torch.load(model_pkl, map_location=torch.device('cpu')))
+        model.eval()
+
+        logsoftmax_out, attn = model(d)
+
+        del model
+
+
+        # update labels
+        with open(pkl_fname,'rb') as f :
+            datapkl = pickle.load(f)
+            f.close()
+        labels = datapkl[label]
+        if False:
+            label_encoder = {v:i for i,v in enumerate(labels.unique())}
+            labels = labels.map(label_encoder)
+            pd.DataFrame(label_encoder,index=[0]).T.to_csv(os.path.join(pdfp,'cond_labels_encoding.csv'))
+        if False:
+            labels = torch.LongTensor(labels.to_numpy())
+        else:
+            labels = torch.LongTensor(labels)
+
+        # add other edge feats
+        F_e = utils.forman_curvature(datapkl['adj'], verbose=True, plot=False)
+        n2v = utils.node2vec_dot2edge(datapkl['adj'], 
+                                      os.path.join(pdfp,'{}_n2v_{}.txt'.format(sample.split('_')[0], os.path.split(pkl_fname)[1].split('.p')[0])),
+                                      preloaded=preloadn2v)
+        edge_attr = torch.cat((torch.tensor(attn, dtype=float),
+                               torch.tensor(utils.range_scale(F_e)).reshape(-1,1), 
+                               torch.tensor(utils.range_scale(n2v)).reshape(-1,1)),dim=1)
+        d = Data(x=d.x, edge_index=d.edge_index, edge_attr=edge_attr, y=labels)
+
+        if verbose:
+            print('\nData shapes:')
+            print(d)
+            print('')
+
+    else:
+        print('Can only load edge feats of a specific entry set type. Exiting.')
+        exit()
+        
     return d

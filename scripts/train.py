@@ -23,7 +23,7 @@ def train(epoch):
     for batch in cl :
         batch = batch.to(device)
         optimizer.zero_grad()
-        if 'transformer' in model_name:
+        if 'transformer' in model_name or 'set' in model_name:
             output = model(batch,utils.edge_set_reshape(batch).float().to(device))
         else:
             output = model(batch)
@@ -39,7 +39,7 @@ def train(epoch):
         for batch_val in cl_val:
             batch_val = batch_val.to(device)
             model.eval()
-            if 'transformer' in model_name:
+            if 'transformer' in model_name or 'set' in model_name:
                 output = model(batch_val, utils.edge_set_reshape(batch_val).float().to(device))
             else:
                 output = model(batch_val)
@@ -56,7 +56,8 @@ def train(epoch):
 # TODO: move this to separate eval script (or nb)
 def compute_test():
     d_test = data.get_data(test_fname, label, 
-                           sample, replicate, 
+                           sample, replicate,
+                           incl_curvature,
                            load_attn1, load_attn2,
                            modelpkl_fname1, modelpkl_fname2,
                            preloadn2v, out_channels=8, 
@@ -76,7 +77,7 @@ def compute_test():
         for batch_test in cl_test:
             batch_test = batch_test.to(device)
             model.eval()
-            if 'transformer' in model_name:
+            if 'transformer' in model_name or 'set' in model_name:
                 output = model(batch_test, utils.edge_set_reshape(batch_test).float().to(device))
             else:
                 output = model(batch_test)
@@ -89,7 +90,7 @@ def compute_test():
     else:
         # keep on cpu
         model.eval()
-        if 'transformer' in model_name:
+        if 'transformer' in model_name or 'set' in model_name:
             output = model(d_test, utils.edge_set_reshape(d_test).float())
         else:
             output = model(d_test)
@@ -108,6 +109,7 @@ if __name__ == '__main__':
     label = kwargs['label']
     sample = kwargs['sample']
     replicate = kwargs['replicate']
+    incl_curvature = kwargs['incl_curvature']
     load_attn = kwargs['load_attn']
     preloadn2v = kwargs['preloadn2v']
     modelpkl_fname = os.path.join(kwargs['pdfp'],kwargs['modelpkl_fname'])

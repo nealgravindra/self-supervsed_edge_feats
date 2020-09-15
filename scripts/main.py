@@ -22,6 +22,7 @@ def main(**kwargs):
                       label=kwargs['label'], 
                       sample=kwargs['sample'], 
                       replicate=kwargs['replicate'], 
+                      incl_curvature=kwargs['incl_curvature'],
                       load_attn1=kwargs['load_attn1'], 
                       load_attn2=kwargs['load_attn2'],
                       modelpkl_fname1=os.path.join(kwargs['pdfp'],kwargs['modelpkl_fname1']),
@@ -34,6 +35,7 @@ def main(**kwargs):
                               label=kwargs['label'], 
                               sample=kwargs['sample'], 
                               replicate=kwargs['replicate'], 
+                              incl_curvature=kwargs['incl_curvature'],
                               load_attn1=kwargs['load_attn1'], 
                               load_attn2=kwargs['load_attn2'],
                               modelpkl_fname1=os.path.join(kwargs['pdfp'],kwargs['modelpkl_fname1']),
@@ -66,7 +68,7 @@ def main(**kwargs):
     models.alpha = kwargs['alpha']
     models.dropout = kwargs['dropout']
 
-    if 'transformer' in kwargs['model']:
+    if 'transformer' in kwargs['model'] and kwargs['model']!='GAT_transformer_averaged':
         # need to define model based on max number of connections
         s_max = []
         for batch in cl:
@@ -89,12 +91,27 @@ def main(**kwargs):
         elif kwargs['model']=='GAT_transformer_mlp_batch':
             model = models.GAT_transformer_mlp_batch().to(device)
         elif kwargs['model']=='GCN_transformer_mlp_batch':
-            model = models.GCN_transformer_mlp_batch().to(device)    
-        
+            model = models.GCN_transformer_mlp_batch().to(device)
+    
+    # specific model names
+    elif kwargs['model']=='GCN_deepset':
+        model = models.GCN_deepset().to(device)
+    elif kwargs['model']=='GCN_set2set':
+        model = models.GCN_set2set().to(device)
+    elif kwargs['model']=='GAT_deepset':
+        model = models.GAT_deepset().to(device)
+    elif kwargs['model']=='GAT_set2set':
+        model = models.GAT_set2set().to(device)
     elif kwargs['model']=='GCN':
         model = models.GCN().to(device)
     elif kwargs['model']=='GAT':
         model = models.GAT().to(device)
+    elif kwargs['model']=='GINE':
+        model = models.GINE().to(device)
+    elif kwargs['model']=='edge_cond_conv':
+        model = models.edge_cond_conv().to(device)
+    elif kwargs['model']=='GAT_transformer_averaged':
+        model = models.GAT_transformer_averaged().to(device)
     else:
         print('Re-enter model name. Valid ones are (GAT/GCN)(_transformer)(_mlp)(_batch) for last two with transformer')
         exit()
@@ -189,6 +206,20 @@ def main(**kwargs):
                 model = models.GAT_transformer_mlp_batch().to(device)
             elif kwargs['model']=='GCN_transformer_mlp_batch':
                 model = models.GCN_transformer_mlp_batch().to(device)
+            elif kwargs['model']=='GCN_deepset':
+                model = models.GCN_deepset().to(device)
+            elif kwargs['model']=='GCN_set2set':
+                model = models.GCN_set2set().to(device)
+            elif kwargs['model']=='GAT_deepset':
+                model = models.GAT_deepset().to(device)
+            elif kwargs['model']=='GAT_set2set':
+                model = models.GAT_set2set().to(device)
+            elif kwargs['model']=='GINE':
+                model = models.GINE().to(device)
+            elif kwargs['model']=='edge_cond_conv':
+                model = models.edge_cond_conv().to(device)
+            elif kwargs['model']=='GAT_transformer_averaged':
+                model = models.GAT_transformer_averaged().to(device)
                 
         model.load_state_dict(torch.load('{}-{}{}.pkl'.format(best_epoch,kwargs['sample'],kwargs['replicate']), 
                                          map_location=torch.device('cpu')))
@@ -197,6 +228,7 @@ def main(**kwargs):
         train.label = kwargs['label']
         train.sample = kwargs['sample']
         train.replicate = kwargs['replicate']
+        train.incl_curvature = kwargs['incl_curvature']
         train.load_attn1 = kwargs['load_attn1']
         train.load_attn2 = kwargs['load_attn2']
         train.modelpkl_fname1 = os.path.join(kwargs['pdfp'],kwargs['modelpkl_fname1'])
@@ -212,28 +244,28 @@ def main(**kwargs):
 if __name__ == '__main__':
     
     params = {
-        
+
         ################################################################################
         # hyperparams
         ################################################################################
-        'pdfp':'/home/ngr4/project/scni/data/processed_200108/',
-        'data_train_pkl':'scni_train_200604.pkl',
-        'data_val_pkl':'scni_val_200604.pkl',
-        'data_test_pkl':'scni_test_200604.pkl',
-        'sample':'scni_ms_gattransmlpbatch',
+        'pdfp':'/home/ngr4/project/covid_lung/data/processed/', #'/home/ngr4/project/sccovid/data/processed/' #'/home/ngr4/project/covid_lung/data/processed/' #'/home/ngr4/project/scni/data/processed_200108/' #'/home/ngr4/project/perturb-seq/data/processed/'
+        'data_train_pkl':'liao_train_200529.pkl', #'hbec_train_200529.pkl' #'liao_train_200529.pkl' #'scni_train_200604.pkl' # 'norman_train.pkl'
+        'data_val_pkl':'liao_val_200529.pkl', #'hbec_val_200529.pkl' #'liao_val_200529.pkl' #'scni_val_200604.pkl', # 'norman_val.pkl'
+        'data_test_pkl':'liao_test_200529.pkl', #'hbec_test_200529.pkl' #'liao_test_200529.pkl' #'scni_test_200604.pkl', # 'norman_test.pkl'
+        'sample':'liao_cond', #'hbec_it' #'liao_cond' #'scni_ms',
         'replicate':sys.argv[1],
-        'label':'yms',
-        'model':'GAT_transformer_mlp_batch', # GAT/GCN(_transformer)(_mlp)(_batch)
+        'label':'ycondition', #'yinftime' #'ycondition' #'yms', #'yguide'
+        'model':'GAT_transformer_averaged', # GAT/GCN(_transformer)(_mlp)(_batch)
+        'incl_curvature':True, # (True/False) include curvature as an edge feature 
         'load_attn1':'yctype', # if load_attn is not None, give label for attn to load 
-        'modelpkl_fname1':'1973-scni_ctype1.pkl', # if load_attn is not None, indicate name of model pkl in pdfp
+        'modelpkl_fname1':'887-liao_ctype_gat1.pkl', #'338-hbec_ctype_gat1.pkl' #'887-liao_ctype_gat1.pkl' #'1973-scni_ctype1.pkl', # if load_attn is not None, indicate name of model pkl in pdfp
         'load_attn2':'ybatch',
-        'modelpkl_fname2':'1996-scni_batch_gat1.pkl',
-        'preloadn2v':False, # (bool) if load_attn is not None and preloadn2v is True, load the sample & datapkl edge attributes
-
+        'modelpkl_fname2':'1988-liao_batch_gat1.pkl', #'1148-hbec_batch_gat1.pkl' #'1988-liao_batch_gat1.pkl' #'1996-scni_batch_gat1.pkl',
+        'preloadn2v':True, # (bool or None) True/False: pre-load, if None, don't include n2v as edge feat
 
         'BatchSize':256,
         'NumParts':5000, # num sub-graphs
-        'Device':'cpu', 
+        'Device':'cpu',
         'LR':0.001, # learning rate
         'WeightDecay':5e-4,
         'fastmode':False, # if `fastmode=False`, report validation
@@ -246,7 +278,7 @@ if __name__ == '__main__':
         'clip':None, # set `clip=1` to turn on gradient clipping
         'rs':random.randint(1,1000000), # random_seed
         ################################################################################
-        
+
     }
 
     
